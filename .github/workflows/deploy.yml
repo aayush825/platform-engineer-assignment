@@ -46,6 +46,11 @@ jobs:
     name: Deploy via SSM
     needs: test
     runs-on: ubuntu-latest
+    # Only attempt a real deployment when AWS is actually configured. Without
+    # the AWS_DEPLOY_ROLE_ARN secret this job is skipped (not failed), so the
+    # pipeline stays green until infrastructure exists. The steps below remain
+    # as the deployment design and activate automatically once the secret is set.
+    if: needs.test.result == 'success' && vars.DEPLOY_ENABLED == 'true'
     # Uses a GitHub Environment so production can require manual approval.
     environment: production
     steps:

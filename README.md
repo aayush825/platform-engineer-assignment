@@ -60,7 +60,15 @@ sudo bash deployment/scripts/rollback.sh <previous_release>   # if needed
 ## 8. CI/CD flow
 Push to `main` → test job (ruff + pytest + pip-audit) → deploy job (OIDC →
 assume AWS role → SSM Run Command runs `deploy.sh` on the tagged instance) →
-health gate. Failures roll back on-host and keep the job red.
+health gate. On-host `deploy.sh` rolls back on failed health checks and the
+job still exits non-zero so a successful rollback never shows green.
+
+The deploy job only runs when the repository variable `DEPLOY_ENABLED` is set
+to `true` (and `AWS_DEPLOY_ROLE_ARN` is configured). Until then it is skipped,
+so CI stays green without live AWS infrastructure. To enable a real deploy:
+`Settings → Secrets and variables → Actions` → add variable `DEPLOY_ENABLED=true`
+and secret `AWS_DEPLOY_ROLE_ARN=<your-oidc-role-arn>`, then tag your EC2
+instance `Name=platform-app`.
 
 ## 9. 502 troubleshooting quick reference
 Confirm symptom → Nginx → app service → process/port → config → permissions →
