@@ -1,0 +1,34 @@
+[Unit]
+Description=platform-app (Gunicorn/Flask)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=platform
+Group=platform
+WorkingDirectory=/opt/platform-app/current
+EnvironmentFile=/etc/platform-app/platform-app.env
+ExecStart=/opt/platform-app/current/.venv/bin/gunicorn \
+    --config /opt/platform-app/current/gunicorn.conf.py \
+    wsgi:app
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# --- Hardening (must not break the app) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+# The app only needs to read its release dir and write logs under shared/.
+ReadWritePaths=/opt/platform-app/shared
+
+[Install]
+WantedBy=multi-user.target

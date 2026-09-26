@@ -1,0 +1,32 @@
+%% Platform-app AWS architecture (version-controlled source of truth)
+flowchart TB
+    user([Internet / Users])
+    r53[Route 53 DNS<br/>alias -> ALB]
+
+    subgraph public[Public Subnet]
+        alb[Application Load Balancer<br/>HTTPS :443 / TLS termination<br/>HTTP :80 -> 443 redirect]
+    end
+
+    subgraph appnet[Private App Subnet]
+        ec2[EC2<br/>Nginx -> Gunicorn -> Flask<br/>IAM instance role]
+    end
+
+    subgraph datanet[Private DB Subnet]
+        rds[(RDS PostgreSQL<br/>private, encrypted<br/>automated backups)]
+    end
+
+    s3[[S3<br/>assets / artifacts / backups]]
+    cw[CloudWatch<br/>logs + metrics + alarms]
+    ct[CloudTrail<br/>API audit]
+
+    gha[GitHub Actions]
+
+    user --> r53 --> alb
+    alb -->|Target Group<br/>health check /health| ec2
+    ec2 -->|SG :5432| rds
+    ec2 --> s3
+    ec2 --> cw
+    rds -.automated backups.-> s3
+    ct -.audit.-> cw
+    gha -->|OIDC short-lived creds| ssm[AWS SSM Run Command]
+    ssm -->|deploy.sh on tagged instance| ec2

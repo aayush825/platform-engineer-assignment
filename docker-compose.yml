@@ -1,0 +1,36 @@
+# Local reproducibility. Uses local-only credentials, never production values.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform
+      POSTGRES_DB: platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    environment:
+      APP_ENV: development
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      GUNICORN_BIND: 0.0.0.0:8000
+      DATABASE_URL: postgresql://platform:platform@postgres:5432/platform
+      LOG_LEVEL: INFO
+      SECRET_KEY: local-dev-only-not-a-secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

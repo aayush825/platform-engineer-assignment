@@ -1,0 +1,121 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA to deploy (defaults to the triggering commit)"
+        required: false
+
+# OIDC: request a short-lived token to assume an AWS IAM role. No static keys.
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  # Tag used to target the deployment instance(s) via SSM Run Command.
+  INSTANCE_TAG_KEY: Name
+  INSTANCE_TAG_VALUE: platform-app
+  APP_ROOT: /opt/platform-app
+  REPO_URL: https://github.com/${{ github.repository }}.git
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Run tests
+        run: pytest -q
+      - name: Dependency vulnerability scan
+        run: pip-audit -r requirements.txt || echo "pip-audit reported findings; review above."
+
+  deploy:
+    name: Deploy via SSM
+    needs: test
+    runs-on: ubuntu-latest
+    # Uses a GitHub Environment so production can require manual approval.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve deployment identifiers
+        id: ids
+        run: |
+          SHA="${{ github.event.inputs.commit_sha }}"
+          if [ -z "$SHA" ]; then SHA="${{ github.sha }}"; fi
+          echo "commit_sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "release_id=$(date -u +%Y%m%d-%H%M%S)-${SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy via SSM Run Command
+        id: ssm
+        run: |
+          set -euo pipefail
+          RELEASE_ID="${{ steps.ids.outputs.release_id }}"
+          COMMIT_SHA="${{ steps.ids.outputs.commit_sha }}"
+
+          CMD_ID=$(aws ssm send-command \
+            --region "${AWS_REGION}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy ${RELEASE_ID}" \
+            --targets "Key=tag:${INSTANCE_TAG_KEY},Values=${INSTANCE_TAG_VALUE}" \
+            --parameters commands=["sudo -u platform ${APP_ROOT}/current/deployment/scripts/backup_current_release.sh || true","sudo bash ${APP_ROOT}/current/deployment/scripts/deploy.sh ${RELEASE_ID} ${COMMIT_SHA} ${REPO_URL}"] \
+            --query "Command.CommandId" --output text)
+          echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
+          echo "Dispatched SSM command $CMD_ID"
+
+      - name: Wait for deployment result
+        run: |
+          set -euo pipefail
+          CMD_ID="${{ steps.ssm.outputs.command_id }}"
+          # Resolve the instance id for the target tag.
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --region "${AWS_REGION}" \
+            --filters "Name=tag:${INSTANCE_TAG_KEY},Values=${INSTANCE_TAG_VALUE}" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
+
+          echo "Waiting on command $CMD_ID for instance $INSTANCE_ID"
+          for i in $(seq 1 60); do
+            STATUS=$(aws ssm list-command-invocations \
+              --region "${AWS_REGION}" --command-id "$CMD_ID" \
+              --details --query "CommandInvocations[0].Status" --output text || echo "Pending")
+            echo "status=$STATUS"
+            case "$STATUS" in
+              Success) echo "Deployment succeeded"; break ;;
+              Failed|Cancelled|TimedOut) 
+                echo "Deployment failed with status $STATUS for commit ${{ steps.ids.outputs.commit_sha }}" >&2
+                aws ssm get-command-invocation --region "${AWS_REGION}" \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+                  --query "StandardErrorContent" --output text || true
+                exit 1 ;;
+            esac
+            sleep 10
+          done
+
+      - name: Deployment failed — mark job red
+        if: failure()
+        run: |
+          echo "::error::Deployment failed for commit ${{ steps.ids.outputs.commit_sha }}."
+          echo "The on-host deploy.sh performs automatic rollback to the previous"
+          echo "release when health checks fail. This job stays red regardless so"
+          echo "the failure is visible even if rollback succeeded."
+          exit 1
