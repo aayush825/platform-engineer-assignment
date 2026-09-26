@@ -15,8 +15,8 @@ releases with symlink-based rollback.
 ## 2. Assignment mapping
 | Part | Deliverable |
 |------|-------------|
-| 1 Deployment | `deployment/`, `docs/solution.md` §1 |
-| 2 CI/CD | `.github/workflows/deploy.yml`, `docs/solution.md` §2 |
+| 1 Deployment | `deployment/` (systemd, nginx, scripts) |
+| 2 CI/CD | `.github/workflows/deploy.yml` |
 | 3 502 Incident | `docs/incident-502-runbook.md` |
 | 4 Security | `docs/security-review.md` |
 | 5 Code change | `app/routes.py`, `app/db.py`, `tests/test_health.py` |
@@ -76,7 +76,7 @@ Route 53 → ALB (HTTPS) → private EC2 → private RDS; S3, IAM, CloudWatch,
 CloudTrail. See `docs/aws-architecture.md` and `architecture/architecture.mmd`.
 
 ## 12. Cost-conscious / free-tool notes
-GitHub Actions, draw.io, Mermaid, Let's Encrypt, Docker Compose, pytest, Ruff,
+GitHub Actions, Mermaid, Let's Encrypt, Docker Compose, pytest, Ruff,
 pip-audit. AWS resources may incur charges — verify current pricing/free-tier
 before provisioning. The repo is complete without live infrastructure.
 
